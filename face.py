@@ -6,9 +6,9 @@ class CircleTracker:
         self.history_x = deque(maxlen=N)
         self.history_y = deque(maxlen=N)
 
-    def draw(self, frame, color):
+    def draw(self, frame, size, color):
         avg_x, avg_y = self.get_avg_position()
-        cv2.circle(frame, (avg_x, avg_y), 3, color, 3)
+        cv2.circle(frame, (avg_x, avg_y), size, color, 3)
 
     def get_avg_position(self):
         avg_x = int(sum(self.history_x) / len(self.history_x)) if self.history_x else 0
@@ -29,8 +29,8 @@ class Eye:
         self.distance = 0
 
     def draw(self, frame):
-        self.sclera.draw(frame, (0, 255, 0))
-        self.pupil.draw(frame, (0, 0, 255))
+        self.sclera.draw(frame, 3, (0, 255, 0))
+        self.pupil.draw(frame, 3, (0, 0, 255))
         self.get_vector()
         cv2.line(frame, self.sclera.get_avg_position(), self.pupil.get_avg_position(), (255, 0, 0), 2)
 
@@ -47,6 +47,7 @@ class Face:
     def __init__(self, N):
         self.dir_x = 0
         self.dir_y = 0
+        self.pos = CircleTracker(N)
         self.left_eye = Eye(N)
         self.right_eye = Eye(N)
         self.vector_direction_history_x = deque(maxlen=N)
@@ -77,6 +78,7 @@ class Face:
     def draw(self, frame):
         self.left_eye.draw(frame)
         self.right_eye.draw(frame)
+        self.pos.draw(frame, 30, (255, 0, 0))
         self.update_vector()
 
         start_x, start_y, end_x, end_y = self.get_vector()

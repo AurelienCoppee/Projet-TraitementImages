@@ -21,6 +21,11 @@ circle_settings = {
     "param2": [14, 150], "minRadius": [10, 100], "maxRadius": [22, 100]
 }
 
+circle_settings_face = {
+    "dp": [18, 50], "minDist": [65, 500], "param1": [98, 150],
+    "param2": [15, 150], "minRadius": [197, 1000], "maxRadius": [95, 1000]
+}
+
 face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
 eye_cascade = cv2.CascadeClassifier('haarcascade_eye.xml')
 
@@ -82,25 +87,65 @@ def update_history(circles, left, right):
                 pos1_idx, pos2_idx = pos2_idx, pos1_idx
 
         if pos1_idx is not None:
-            print("left :", circles[pos1_idx])
             left.update_history(circles[pos1_idx])
         if pos2_idx is not None:
-            print("right :", circles[pos2_idx])
             right.update_history(circles[pos2_idx])
 
 
-def detect_eyes_and_faces(frame):
+def update_history_face(circles):
+    if circles is not None:
+        avg_pos1_x, avg_pos1_y = face.pos.get_avg_position()
+        circles = np.uint16(np.around(circles))
+        circles = sorted(circles[0], key=lambda x: x[0])
+        print("circles", circles)
+
+        def compute_distances(avg_x, avg_y, circles):
+            return [np.sqrt((c[0] - avg_x)**2 + (c[1] - avg_y)**2) for c in circles] if avg_x or avg_y else [float("inf")] * len(circles)
+
+        def get_position_indices(avg_pos1):
+            dists_pos1 = compute_distances(*avg_pos1, circles)
+
+            pos1_idx = np.argmin(dists_pos1)
+
+            pos1_idx = np.argsort(dists_pos1)[1] if len(
+                circles) > 1 else None
+            return pos1_idx
+
+        pos1_idx = get_position_indices((avg_pos1_x, avg_pos1_y))
+
+        if pos1_idx is not None:
+            print("face :", circles[pos1_idx])
+            face.pos.update_history(circles[pos1_idx])
+
+
+def detect_eyes_and_faces(frame, last_frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+
+    if last_frame is not None:
+        frame_diff = cv2.absdiff(last_frame, frame)
+        gray_diff = cv2.cvtColor(frame_diff, cv2.COLOR_BGR2GRAY)
+        thresh_diff = cv2.threshold(gray_diff, 15, 255, cv2.THRESH_BINARY)[1]
+        blur_diff = cv2.blur(thresh_diff, (5, 5))
+        circles = cv2.HoughCircles(blur_diff, method=cv2.HOUGH_GRADIENT, dp=cv2.getTrackbarPos("dp", "Circle Settings Face")/10,
+                                   minDist=cv2.getTrackbarPos("minDist", "Circle Settings Face"), param1=cv2.getTrackbarPos("param1", "Circle Settings Face"), param2=cv2.getTrackbarPos("param2", "Circle Settings Face"), minRadius=cv2.getTrackbarPos("minRadius", "Circle Settings Face"), maxRadius=cv2.getTrackbarPos("maxRadius", "Circle Settings Face"))
+
+        if circles is not None:
+            circles = np.uint16(np.around(circles))
+            update_history_face(circles)
+            for i in circles[0, :]:
+                cv2.circle(frame_diff, (i[0], i[1]), i[2], (0, 255, 0), 2)
+                cv2.circle(frame_diff, (i[0], i[1]), 2, (0, 0, 255), 3)
+
+        cv2.imshow('Face detection', frame_diff)
+
     eyes_detected = []
 
     if len(faces) == 1:
-        print("Face Detected")
         for (x, y, w, h) in faces:
             roi_gray = gray[y:y+h, x:x+w]
             eyes = eye_cascade.detectMultiScale(roi_gray)
             if len(eyes) > 0:
-                print(len(eyes), " eye(s) Detected")
                 eyes_detected.extend([(ex + x, ey + y, ew, eh)
                                      for (ex, ey, ew, eh) in eyes])
 
@@ -126,12 +171,15 @@ def process_and_mask_eyes(frame, eyes):
 create_trackbars("Eye Settings", eye_settings)
 create_trackbars("Iris Settings", iris_settings)
 create_trackbars("Circle Settings", circle_settings)
+create_trackbars("Circle Settings Face", circle_settings_face)
 
 cam = cv2.VideoCapture(0)
 cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 1024)
 
 face = face.Face(N)
+
+last_frame = None
 
 while True:
     print("Run")
@@ -140,7 +188,8 @@ while True:
     if ret:
         # frame = cv2.flip(frame, -1)  # Flip camera vertically
         display_frame = frame.copy()
-        eyes_detected = detect_eyes_and_faces(frame)
+        eyes_detected = detect_eyes_and_faces(frame, last_frame)
+        last_frame = display_frame
 
         if eyes_detected:
             eyes_only, mask_sclera, mask_pupil = process_and_mask_eyes(
@@ -190,8 +239,10 @@ while True:
             cv2.imshow('Masked Sclera', masked_sclera)
             cv2.imshow('Masked Pupil', masked_pupil)
 
-            update_history(circles_pupil, face.left_eye.pupil, face.right_eye.pupil)
-            update_history(circles_sclera, face.left_eye.sclera, face.right_eye.sclera)
+            update_history(circles_pupil, face.left_eye.pupil,
+                           face.right_eye.pupil)
+            update_history(circles_sclera, face.left_eye.sclera,
+                           face.right_eye.sclera)
 
         face.draw(display_frame)
         cv2.imshow('Detected', display_frame)
