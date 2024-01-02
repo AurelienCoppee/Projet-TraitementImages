@@ -4,14 +4,11 @@ import numpy as np
 
 N = 5
 eye_settings = {
-    # 146 0 66
     "Lower Eye H": [0, 255], "Lower Eye S": [0, 255], "Lower Eye V": [0, 255],
-    # 255 111 203
     "Upper Eye H": [255, 255], "Upper Eye S": [26, 255], "Upper Eye V": [121, 255]
 }
 
 iris_settings = {
-    # 0 0 38
     "Lower Iris H": [0, 255], "Lower Iris S": [0, 255], "Lower Iris V": [84, 255],
     "Upper Iris H": [255, 255], "Upper Iris S": [255, 255], "Upper Iris V": [255, 255]
 }
@@ -22,8 +19,8 @@ circle_settings = {
 }
 
 circle_settings_face = {
-    "dp": [18, 50], "minDist": [65, 500], "param1": [98, 150],
-    "param2": [15, 150], "minRadius": [197, 1000], "maxRadius": [95, 1000]
+    "dp": [2, 50], "minDist": [400, 500], "param1": [100, 150],
+    "param2": [30, 150], "minRadius": [95, 1000], "maxRadius": [204, 1000]
 }
 
 face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
@@ -97,7 +94,6 @@ def update_history_face(circles):
         avg_pos1_x, avg_pos1_y = face.pos.get_avg_position()
         circles = np.uint16(np.around(circles))
         circles = sorted(circles[0], key=lambda x: x[0])
-        print("circles", circles)
 
         def compute_distances(avg_x, avg_y, circles):
             return [np.sqrt((c[0] - avg_x)**2 + (c[1] - avg_y)**2) for c in circles] if avg_x or avg_y else [float("inf")] * len(circles)
@@ -107,14 +103,11 @@ def update_history_face(circles):
 
             pos1_idx = np.argmin(dists_pos1)
 
-            pos1_idx = np.argsort(dists_pos1)[1] if len(
-                circles) > 1 else None
             return pos1_idx
 
         pos1_idx = get_position_indices((avg_pos1_x, avg_pos1_y))
 
         if pos1_idx is not None:
-            print("face :", circles[pos1_idx])
             face.pos.update_history(circles[pos1_idx])
 
 
@@ -125,29 +118,20 @@ def detect_eyes_and_faces(frame, last_frame):
     if last_frame is not None:
         frame_diff = cv2.absdiff(last_frame, frame)
         gray_diff = cv2.cvtColor(frame_diff, cv2.COLOR_BGR2GRAY)
-        thresh_diff = cv2.threshold(gray_diff, 15, 255, cv2.THRESH_BINARY)[1]
-        blur_diff = cv2.blur(thresh_diff, (5, 5))
-        circles = cv2.HoughCircles(blur_diff, method=cv2.HOUGH_GRADIENT, dp=cv2.getTrackbarPos("dp", "Circle Settings Face")/10,
+        kernel = np.ones((3, 3), np.uint8)
+        blur_diff = cv2.medianBlur(gray_diff, 1)
+        erosion = cv2.erode(blur_diff, kernel, iterations=1)
+        thresh_diff = cv2.threshold(erosion, 10, 255, cv2.THRESH_BINARY)[1]
+        circles = cv2.HoughCircles(thresh_diff, method=cv2.HOUGH_GRADIENT, dp=cv2.getTrackbarPos("dp", "Circle Settings Face")/10,
                                    minDist=cv2.getTrackbarPos("minDist", "Circle Settings Face"), param1=cv2.getTrackbarPos("param1", "Circle Settings Face"), param2=cv2.getTrackbarPos("param2", "Circle Settings Face"), minRadius=cv2.getTrackbarPos("minRadius", "Circle Settings Face"), maxRadius=cv2.getTrackbarPos("maxRadius", "Circle Settings Face"))
+
+        cv2.imshow('Tresh', thresh_diff)
 
         if circles is not None:
             circles = np.uint16(np.around(circles))
             update_history_face(circles)
-            for i in circles[0, :]:
-                cv2.circle(frame_diff, (i[0], i[1]), i[2], (0, 255, 0), 2)
-                cv2.circle(frame_diff, (i[0], i[1]), 2, (0, 0, 255), 3)
-
-        cv2.imshow('Face detection', frame_diff)
 
     eyes_detected = []
-
-    if len(faces) == 1:
-        for (x, y, w, h) in faces:
-            roi_gray = gray[y:y+h, x:x+w]
-            eyes = eye_cascade.detectMultiScale(roi_gray)
-            if len(eyes) > 0:
-                eyes_detected.extend([(ex + x, ey + y, ew, eh)
-                                     for (ex, ey, ew, eh) in eyes])
 
     return eyes_detected
 
@@ -189,60 +173,60 @@ while True:
         # frame = cv2.flip(frame, -1)  # Flip camera vertically
         display_frame = frame.copy()
         eyes_detected = detect_eyes_and_faces(frame, last_frame)
-        last_frame = display_frame
+        last_frame = frame.copy()
 
-        if eyes_detected:
-            eyes_only, mask_sclera, mask_pupil = process_and_mask_eyes(
-                frame, eyes_detected)
+        # if eyes_detected:
+        #     eyes_only, mask_sclera, mask_pupil = process_and_mask_eyes(
+        #         frame, eyes_detected)
 
-            inverted_mask_pupil = cv2.bitwise_not(mask_pupil)
-            kernel = np.ones((3, 3), np.uint8)
-            erosion = cv2.erode(inverted_mask_pupil,
-                                kernel, iterations=4)
-            dilation = cv2.dilate(erosion, kernel, iterations=3)
-            closing = cv2.morphologyEx(
-                mask_sclera, cv2.MORPH_CLOSE, kernel)
+        #     inverted_mask_pupil = cv2.bitwise_not(mask_pupil)
+        #     kernel = np.ones((3, 3), np.uint8)
+        #     erosion = cv2.erode(inverted_mask_pupil,
+        #                         kernel, iterations=4)
+        #     dilation = cv2.dilate(erosion, kernel, iterations=3)
+        #     closing = cv2.morphologyEx(
+        #         mask_sclera, cv2.MORPH_CLOSE, kernel)
 
-            masked_sclera = cv2.bitwise_and(
-                eyes_only, eyes_only, mask=closing)
-            masked_pupil = cv2.bitwise_and(
-                eyes_only, eyes_only, mask=dilation)
+        #     masked_sclera = cv2.bitwise_and(
+        #         eyes_only, eyes_only, mask=closing)
+        #     masked_pupil = cv2.bitwise_and(
+        #         eyes_only, eyes_only, mask=dilation)
 
-            grey_pupil = cv2.cvtColor(
-                masked_pupil, cv2.COLOR_BGR2GRAY)
-            blur_pupil = cv2.blur(grey_pupil, (5, 5))
+        #     grey_pupil = cv2.cvtColor(
+        #         masked_pupil, cv2.COLOR_BGR2GRAY)
+        #     blur_pupil = cv2.blur(grey_pupil, (5, 5))
 
-            grey_sclera = cv2.cvtColor(
-                masked_sclera, cv2.COLOR_BGR2GRAY)
-            blur_sclera = cv2.blur(grey_sclera, (5, 5))
+        #     grey_sclera = cv2.cvtColor(
+        #         masked_sclera, cv2.COLOR_BGR2GRAY)
+        #     blur_sclera = cv2.blur(grey_sclera, (5, 5))
 
-            circles_pupil = cv2.HoughCircles(blur_pupil, method=cv2.HOUGH_GRADIENT, dp=cv2.getTrackbarPos("dp", "Circle Settings")/10,
-                                             minDist=cv2.getTrackbarPos("minDist", "Circle Settings"), param1=cv2.getTrackbarPos("param1", "Circle Settings"), param2=cv2.getTrackbarPos("param2", "Circle Settings"), minRadius=cv2.getTrackbarPos("minRadius", "Circle Settings"), maxRadius=cv2.getTrackbarPos("maxRadius", "Circle Settings"))
+        #     circles_pupil = cv2.HoughCircles(blur_pupil, method=cv2.HOUGH_GRADIENT, dp=cv2.getTrackbarPos("dp", "Circle Settings")/10,
+        #                                      minDist=cv2.getTrackbarPos("minDist", "Circle Settings"), param1=cv2.getTrackbarPos("param1", "Circle Settings"), param2=cv2.getTrackbarPos("param2", "Circle Settings"), minRadius=cv2.getTrackbarPos("minRadius", "Circle Settings"), maxRadius=cv2.getTrackbarPos("maxRadius", "Circle Settings"))
 
-            circles_sclera = cv2.HoughCircles(blur_sclera, method=cv2.HOUGH_GRADIENT, dp=cv2.getTrackbarPos("dp", "Circle Settings")/10,
-                                              minDist=cv2.getTrackbarPos("minDist", "Circle Settings"), param1=cv2.getTrackbarPos("param1", "Circle Settings"), param2=cv2.getTrackbarPos("param2", "Circle Settings"), minRadius=cv2.getTrackbarPos("minRadius", "Circle Settings"), maxRadius=cv2.getTrackbarPos("maxRadius", "Circle Settings"))
+        #     circles_sclera = cv2.HoughCircles(blur_sclera, method=cv2.HOUGH_GRADIENT, dp=cv2.getTrackbarPos("dp", "Circle Settings")/10,
+        #                                       minDist=cv2.getTrackbarPos("minDist", "Circle Settings"), param1=cv2.getTrackbarPos("param1", "Circle Settings"), param2=cv2.getTrackbarPos("param2", "Circle Settings"), minRadius=cv2.getTrackbarPos("minRadius", "Circle Settings"), maxRadius=cv2.getTrackbarPos("maxRadius", "Circle Settings"))
 
-            if circles_pupil is not None:
-                circles_pupil = np.uint16(np.around(circles_pupil))
-                for i in circles_pupil[0, :]:
-                    cv2.circle(
-                        masked_pupil, (i[0], i[1]), i[2], (0, 255, 0), 2)
-                    cv2.circle(masked_pupil, (i[0], i[1]), 2, (0, 0, 255), 3)
+        #     if circles_pupil is not None:
+        #         circles_pupil = np.uint16(np.around(circles_pupil))
+        #         for i in circles_pupil[0, :]:
+        #             cv2.circle(
+        #                 masked_pupil, (i[0], i[1]), i[2], (0, 255, 0), 2)
+        #             cv2.circle(masked_pupil, (i[0], i[1]), 2, (0, 0, 255), 3)
 
-            if circles_sclera is not None:
-                circles_sclera = np.uint16(np.around(circles_sclera))
-                for i in circles_sclera[0, :]:
-                    cv2.circle(masked_sclera,
-                               (i[0], i[1]), i[2], (0, 255, 0), 2)
-                    cv2.circle(masked_sclera, (i[0], i[1]), 2, (0, 0, 255), 3)
+        #     if circles_sclera is not None:
+        #         circles_sclera = np.uint16(np.around(circles_sclera))
+        #         for i in circles_sclera[0, :]:
+        #             cv2.circle(masked_sclera,
+        #                        (i[0], i[1]), i[2], (0, 255, 0), 2)
+        #             cv2.circle(masked_sclera, (i[0], i[1]), 2, (0, 0, 255), 3)
 
-            cv2.imshow('Masked Sclera', masked_sclera)
-            cv2.imshow('Masked Pupil', masked_pupil)
+        #     cv2.imshow('Masked Sclera', masked_sclera)
+        #     cv2.imshow('Masked Pupil', masked_pupil)
 
-            update_history(circles_pupil, face.left_eye.pupil,
-                           face.right_eye.pupil)
-            update_history(circles_sclera, face.left_eye.sclera,
-                           face.right_eye.sclera)
+        #     update_history(circles_pupil, face.left_eye.pupil,
+        #                    face.right_eye.pupil)
+        #     update_history(circles_sclera, face.left_eye.sclera,
+        #                    face.right_eye.sclera)
 
         face.draw(display_frame)
         cv2.imshow('Detected', display_frame)

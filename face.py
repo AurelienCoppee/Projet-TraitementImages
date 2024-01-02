@@ -78,7 +78,7 @@ class Face:
     def draw(self, frame):
         self.left_eye.draw(frame)
         self.right_eye.draw(frame)
-        self.pos.draw(frame, 30, (255, 0, 0))
+        self.pos.draw(frame, 80, (255, 0, 0))
         self.update_vector()
 
         start_x, start_y, end_x, end_y = self.get_vector()
