@@ -1,31 +1,23 @@
 import cv2
-import face
+from face import Face, FaceStatus
 import numpy as np
 
-N = 5
-eye_settings = {
-    "Lower Eye H": [0, 255], "Lower Eye S": [0, 255], "Lower Eye V": [0, 255],
-    "Upper Eye H": [255, 255], "Upper Eye S": [26, 255], "Upper Eye V": [121, 255]
-}
+N = 3
+faces = []
 
-iris_settings = {
-    "Lower Iris H": [0, 255], "Lower Iris S": [0, 255], "Lower Iris V": [84, 255],
-    "Upper Iris H": [255, 255], "Upper Iris S": [255, 255], "Upper Iris V": [255, 255]
+edges = {
+    "Min": [82, 1000], "Max": [116, 1000],
 }
 
 circle_settings = {
-    "dp": [25, 50], "minDist": [65, 500], "param1": [22, 150],
-    "param2": [14, 150], "minRadius": [10, 100], "maxRadius": [22, 100]
+    "dp": [2, 50], "minDist": [100, 500], "param1": [100, 150],
+    "param2": [16, 150], "minRadius": [5, 100], "maxRadius": [22, 100]
 }
 
 circle_settings_face = {
     "dp": [2, 50], "minDist": [400, 500], "param1": [100, 150],
-    "param2": [30, 150], "minRadius": [95, 1000], "maxRadius": [204, 1000]
+    "param2": [31, 150], "minRadius": [60, 1000], "maxRadius": [300, 1000]
 }
-
-face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
-eye_cascade = cv2.CascadeClassifier('haarcascade_eye.xml')
-
 
 def create_trackbars(window_name, settings):
     cv2.namedWindow(window_name)
@@ -33,28 +25,10 @@ def create_trackbars(window_name, settings):
         cv2.createTrackbar(setting, window_name,
                            value[0], value[1], lambda x: None)
 
-
-def hsv_threshold(frame, settings_name):
-    hsv_img = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
-
-    lower = np.array([cv2.getTrackbarPos(f'Lower {settings_name} H', settings_name + ' Settings'),
-                      cv2.getTrackbarPos(
-        f'Lower {settings_name} S', settings_name + ' Settings'),
-        cv2.getTrackbarPos(f'Lower {settings_name} V', settings_name + ' Settings')])
-
-    upper = np.array([cv2.getTrackbarPos(f'Upper {settings_name} H', settings_name + ' Settings'),
-                      cv2.getTrackbarPos(
-        f'Upper {settings_name} S', settings_name + ' Settings'),
-        cv2.getTrackbarPos(f'Upper {settings_name} V', settings_name + ' Settings')])
-
-    return cv2.inRange(hsv_img, lower, upper)
-
-
 def update_history(circles, left, right):
     if circles is not None:
         avg_pos1_x, avg_pos1_y = left.get_avg_position()
         avg_pos2_x, avg_pos2_y = right.get_avg_position()
-        circles = np.uint16(np.around(circles))
         circles = sorted(circles[0], key=lambda x: x[0])
 
         def compute_distances(avg_x, avg_y, circles):
@@ -91,50 +65,48 @@ def update_history(circles, left, right):
 
 def update_history_face(circles):
     if circles is not None:
-        avg_pos1_x, avg_pos1_y = face.pos.get_avg_position()
         circles = np.uint16(np.around(circles))
         circles = sorted(circles[0], key=lambda x: x[0])
 
-        def compute_distances(avg_x, avg_y, circles):
-            return [np.sqrt((c[0] - avg_x)**2 + (c[1] - avg_y)**2) for c in circles] if avg_x or avg_y else [float("inf")] * len(circles)
+        def associate_circle_with_face(circle, faces):
+            for face in faces:
+                if face.status == FaceStatus.DESTROYED:
+                    continue
+                face_pos = face.pos.get_avg_position()
+                distance = np.sqrt((circle[0] - face_pos[0])**2 + (circle[1] - face_pos[1])**2)
+                if distance < face_pos[2]*1.5:
+                    return face
+            return None
 
-        def get_position_indices(avg_pos1):
-            dists_pos1 = compute_distances(*avg_pos1, circles)
-
-            pos1_idx = np.argmin(dists_pos1)
-
-            return pos1_idx
-
-        pos1_idx = get_position_indices((avg_pos1_x, avg_pos1_y))
-
-        if pos1_idx is not None:
-            face.pos.update_history(circles[pos1_idx])
+        for circle in circles:
+            face = associate_circle_with_face(circle, faces)
+            if face is not None:
+                if face.status != FaceStatus.CIRCLE_VALIDATED:
+                    face.update_history(circle)
+            else:
+                new_face = Face(N)
+                new_face.update_history(circle)
+                faces.append(new_face)
 
 
-def detect_eyes_and_faces(frame, last_frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-
+def detect_faces(frame, last_frame):
     if last_frame is not None:
         frame_diff = cv2.absdiff(last_frame, frame)
         gray_diff = cv2.cvtColor(frame_diff, cv2.COLOR_BGR2GRAY)
-        kernel = np.ones((3, 3), np.uint8)
+        kernel = np.ones((2, 2), np.uint8)
         blur_diff = cv2.medianBlur(gray_diff, 1)
         erosion = cv2.erode(blur_diff, kernel, iterations=1)
         thresh_diff = cv2.threshold(erosion, 10, 255, cv2.THRESH_BINARY)[1]
         circles = cv2.HoughCircles(thresh_diff, method=cv2.HOUGH_GRADIENT, dp=cv2.getTrackbarPos("dp", "Circle Settings Face")/10,
                                    minDist=cv2.getTrackbarPos("minDist", "Circle Settings Face"), param1=cv2.getTrackbarPos("param1", "Circle Settings Face"), param2=cv2.getTrackbarPos("param2", "Circle Settings Face"), minRadius=cv2.getTrackbarPos("minRadius", "Circle Settings Face"), maxRadius=cv2.getTrackbarPos("maxRadius", "Circle Settings Face"))
 
-        cv2.imshow('Tresh', thresh_diff)
-
         if circles is not None:
             circles = np.uint16(np.around(circles))
+            # for i in circles[0, :]:
+            #     cv2.circle(display_frame, (i[0], i[1]), i[2], (0, 255, 0), 2)
+            #     cv2.circle(display_frame, (i[0], i[1]), 2, (0, 0, 255), 3)
+
             update_history_face(circles)
-
-    eyes_detected = []
-
-    return eyes_detected
-
 
 def process_and_mask_eyes(frame, eyes):
     eyes_only = np.zeros((1024, 1280, 3), dtype=np.uint8)
@@ -152,16 +124,15 @@ def process_and_mask_eyes(frame, eyes):
     return eyes_only, mask_eye, mask_iris
 
 
-create_trackbars("Eye Settings", eye_settings)
-create_trackbars("Iris Settings", iris_settings)
+create_trackbars("Edges", edges)
 create_trackbars("Circle Settings", circle_settings)
 create_trackbars("Circle Settings Face", circle_settings_face)
 
-cam = cv2.VideoCapture(0)
-cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 1024)
-
-face = face.Face(N)
+cam = cv2.VideoCapture(2)
+# cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+# cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 1024)
+cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1920/2)
+cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080/2)
 
 last_frame = None
 
@@ -170,9 +141,8 @@ while True:
     ret, frame = cam.read()
 
     if ret:
-        # frame = cv2.flip(frame, -1)  # Flip camera vertically
         display_frame = frame.copy()
-        eyes_detected = detect_eyes_and_faces(frame, last_frame)
+        detect_faces(frame, last_frame)
         last_frame = frame.copy()
 
         # if eyes_detected:
@@ -227,8 +197,9 @@ while True:
         #                    face.right_eye.pupil)
         #     update_history(circles_sclera, face.left_eye.sclera,
         #                    face.right_eye.sclera)
+        for face in faces:
+            face.compute(display_frame)
 
-        face.draw(display_frame)
         cv2.imshow('Detected', display_frame)
 
         if cv2.waitKey(5) == 27 or cv2.getWindowProperty('Detected', cv2.WND_PROP_VISIBLE) < 1:

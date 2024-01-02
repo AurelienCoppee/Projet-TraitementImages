@@ -1,23 +1,29 @@
 import cv2
 from collections import deque
+from enum import Enum
+import time
+import numpy as np
 
 class CircleTracker:
     def __init__(self, N):
         self.history_x = deque(maxlen=N)
         self.history_y = deque(maxlen=N)
+        self.history_d = deque(maxlen=N)
 
-    def draw(self, frame, size, color):
-        avg_x, avg_y = self.get_avg_position()
-        cv2.circle(frame, (avg_x, avg_y), size, color, 3)
+    def draw(self, frame, color):
+        avg_x, avg_y, avg_d = self.get_avg_position()
+        cv2.circle(frame, (avg_x, avg_y), int(avg_d/2), color, 3)
 
     def get_avg_position(self):
         avg_x = int(sum(self.history_x) / len(self.history_x)) if self.history_x else 0
         avg_y = int(sum(self.history_y) / len(self.history_y)) if self.history_y else 0
-        return avg_x, avg_y
+        avg_d = int(sum(self.history_d) / len(self.history_d)) if self.history_d else 0
+        return avg_x, avg_y, avg_d
 
     def update_history(self, circle):
         self.history_x.append(circle[0])
         self.history_y.append(circle[1])
+        self.history_d.append(circle[2])
 
 
 class Eye:
@@ -45,42 +51,82 @@ class Eye:
 
 class Face:
     def __init__(self, N):
-        self.dir_x = 0
-        self.dir_y = 0
         self.pos = CircleTracker(N)
-        self.left_eye = Eye(N)
-        self.right_eye = Eye(N)
-        self.vector_direction_history_x = deque(maxlen=N)
-        self.vector_direction_history_y = deque(maxlen=N)
-        self.vector_distance_history = deque(maxlen=N)
+        self.status = FaceStatus.CREATED
+        self.created_time = time.time()
+        self.update_threshold = 8
+        self.lost_threshold = 15
+        self.update_interval = 1
+        self.update_count = 0
+        self.lost_count = 0
 
-    def update_vector(self):
-        avg_dir_x = (self.left_eye.dir_x + self.right_eye.dir_x) // 2
-        avg_dir_y = (self.left_eye.dir_y + self.right_eye.dir_y) // 2
-        avg_distance = (self.left_eye.distance + self.right_eye.distance) // 2
+    def compute(self, frame):
+        if self.status == FaceStatus.CREATED:
+            current_time = time.time()
+            if current_time - self.created_time > self.update_interval:
+                self.status = FaceStatus.DESTROYED
 
-        self.vector_direction_history_x.append(avg_dir_x)
-        self.vector_direction_history_y.append(avg_dir_y)
-        self.vector_distance_history.append(avg_distance)
+            if self.update_count >= self.update_threshold:
+                print("test")
+                self.initialize_tracker(frame)
+                self.status = FaceStatus.CIRCLE_VALIDATED
+                return
+        if self.status == FaceStatus.CIRCLE_VALIDATED:
+            self.update_tracker(frame)
 
-    def get_vector(self):
-        avg_dir_x = int(sum(self.vector_direction_history_x) / len(self.vector_direction_history_x)) if self.vector_direction_history_x else 0
-        avg_dir_y = int(sum(self.vector_direction_history_y) / len(self.vector_direction_history_y)) if self.vector_direction_history_y else 0
-        avg_distance = int(sum(self.vector_distance_history) / len(self.vector_distance_history)) if self.vector_distance_history else 0
+            avg_x, avg_y, avg_d = self.pos.get_avg_position()
+            radius = int(avg_d / 2)
+            center = (int(avg_x), int(avg_y))
+            mask = np.zeros(frame.shape[:2], dtype="uint8")
+            cv2.circle(mask, center, radius, 255, -1)
+            masked_frame = cv2.bitwise_and(frame, frame, mask=mask)
+            gray_masked = cv2.cvtColor(masked_frame, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray_masked, cv2.getTrackbarPos("Min", "Edges"), cv2.getTrackbarPos("Max", "Edges"))
 
-        start_x = (self.left_eye.sclera.get_avg_position()[0] + self.right_eye.sclera.get_avg_position()[0]) // 2
-        start_y = (self.left_eye.sclera.get_avg_position()[1] + self.right_eye.sclera.get_avg_position()[1]) // 2
-        end_x = start_x + avg_dir_x
-        end_y = start_y + avg_dir_y
+            circles = cv2.HoughCircles(edges, method=cv2.HOUGH_GRADIENT, dp=cv2.getTrackbarPos("dp", "Circle Settings")/10,
+                                    minDist=cv2.getTrackbarPos("minDist", "Circle Settings"),
+                                    param1=cv2.getTrackbarPos("param1", "Circle Settings"),
+                                    param2=cv2.getTrackbarPos("param2", "Circle Settings"),
+                                    minRadius=cv2.getTrackbarPos("minRadius", "Circle Settings"),
+                                    maxRadius=cv2.getTrackbarPos("maxRadius", "Circle Settings"))
 
-        return start_x, start_y, end_x, end_y
+            if circles is not None:
+                circles = np.uint16(np.around(circles))
+                for i in circles[0, :]:
+                    cv2.circle(masked_frame, (i[0], i[1]), i[2], (0, 255, 0), 2)
+                    cv2.circle(masked_frame, (i[0], i[1]), 2, (0, 0, 255), 3)
 
-    def draw(self, frame):
-        self.left_eye.draw(frame)
-        self.right_eye.draw(frame)
-        self.pos.draw(frame, 80, (255, 0, 0))
-        self.update_vector()
+            cv2.imshow("Edges", edges)
+            cv2.imshow("Masked Frame", masked_frame)
+            return
+    
+    def update_history(self, circle):
+        self.pos.update_history(circle)
+        self.update_count += 1
 
-        start_x, start_y, end_x, end_y = self.get_vector()
+    def initialize_tracker(self, frame):
+        avg_x, avg_y, avg_d = self.pos.get_avg_position()
+        self.tracker = cv2.TrackerKCF_create()
+        self.tracker.init(frame, (int(avg_x - avg_d), int(avg_y - avg_d), int(avg_d*2), int(avg_d*2)))
 
-        cv2.line(frame, (start_x, start_y), (end_x, end_y), (255, 255, 0), 2)
+    def update_tracker(self, frame):
+        success, box = self.tracker.update(frame)
+        if success:
+            x, y, w, h = map(int, box)
+
+            new_x = x + w // 2
+            new_y = y + h // 2
+            new_d = (w + h) // 2
+
+            self.update_history((new_x, new_y, new_d))
+        else:
+            if self.lost_count >= self.lost_threshold:
+                self.update_count = 0
+                self.status = FaceStatus.CREATED
+            else:
+                self.lost_count += 1
+
+class FaceStatus(Enum):
+    DESTROYED = 0
+    CREATED = 1
+    CIRCLE_VALIDATED = 2
