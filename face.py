@@ -3,7 +3,6 @@ from collections import deque
 from enum import Enum
 import time
 import numpy as np
-import os
 
 def update_history_eyes(circles, eyes, N):
     if circles is not None:
@@ -57,9 +56,9 @@ class Eye:
         self.status = EyeStatus.CREATED
         self.update_count = 0
         self.created_time = time.time()
-        self.update_interval = 2
-        self.update_threshold = 3
-        self.lost_threshold = 15
+        self.update_interval = 1
+        self.update_threshold = 4
+        self.lost_threshold = 20
         self.lost_count = 0
 
     def draw(self, frame):
@@ -100,6 +99,7 @@ class Eye:
     def update_tracker(self, frame):
         success, box = self.tracker.update(frame)
         if success:
+            self.lost_count = 0
             x, y, w, h = map(int, box)
 
             # cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
@@ -110,12 +110,11 @@ class Eye:
 
             self.update_history((new_x, new_y, new_d))
         else:
-            print("Can't track")
-        #     if self.lost_count >= self.lost_threshold:
-        #         self.update_count = 0
-        #         self.status = EyeStatus.CREATED
-        #     else:
-        #         self.lost_count += 1
+            if self.lost_count >= self.lost_threshold:
+                self.update_count = 0
+                self.status = EyeStatus.CREATED
+            else:
+                self.lost_count += 1
 
 class EyeStatus(Enum):
     DESTROYED = 0
@@ -130,7 +129,7 @@ class Face:
         self.right_eye = Eye(N)
         self.status = FaceStatus.CREATED
         self.created_time = time.time()
-        self.update_threshold = 8
+        self.update_threshold = 5
         self.lost_threshold = 15
         self.update_interval = 0.25
         self.update_count = 0
@@ -138,8 +137,10 @@ class Face:
         self.eyes = []
         self.eyecount = 0
 
-    def compute(self, frame, display_frame):
+    def compute(self, frame_sent, display_frame):
+        frame = frame_sent.copy()
         if self.status == FaceStatus.CREATED:
+            # self.pos.draw(display_frame, (0, 0, 255))
             current_time = time.time()
             if current_time - self.created_time > self.update_interval:
                 self.status = FaceStatus.DESTROYED
@@ -151,6 +152,7 @@ class Face:
                 self.status = FaceStatus.CIRCLE_VALIDATED
                 return
         if self.status == FaceStatus.CIRCLE_VALIDATED:
+            # self.pos.draw(display_frame, (0, 255, 0))
             self.update_tracker(frame)
 
             avg_x, avg_y, avg_d = self.pos.get_avg_position()
@@ -195,11 +197,10 @@ class Face:
                 circles = np.uint16(np.around(circles))
                 for i in circles[0, :]:
                     update_history_eyes(circles, self.eyes, self.N)
-                    cv2.circle(closed_edges, (i[0], i[1]), i[2], (0, 255, 0), 2)
-                    cv2.circle(closed_edges, (i[0], i[1]), 2, (0, 0, 255), 3)
+                    # cv2.circle(display_frame, (i[0], i[1]), i[2], (0, 255, 0), 2)
 
-            cv2.imshow("Edges", closed_edges)
-            cv2.imshow("Masked Frame", masked_frame)
+            # cv2.imshow("Edges", closed_edges)
+            # cv2.imshow("Masked Frame", masked_frame)
             current_time = time.time()
 
             self.eyecount = 0
@@ -218,6 +219,11 @@ class Face:
             return
         
         if self.status == FaceStatus.FACE_VALIDATED:
+            # self.pos.draw(display_frame, (255, 0, 0))
+            if self.left_eye.status == EyeStatus.DESTROYED and self.right_eye.status == EyeStatus.DESTROYED:
+                self.status = FaceStatus.CREATED
+                self.eyes = []
+                return
             if self.left_eye.pos.get_avg_position() == (0, 0, 0) and self.right_eye.pos.get_avg_position() == (0, 0, 0):
                 self.select_eyes()
                 self.load_glasses_sprite()
@@ -239,7 +245,7 @@ class Face:
             glasses_width = int(abs(dx) * 2.1)
             
             aspect_ratio = self.glasses_sprite.shape[1] / self.glasses_sprite.shape[0]
-            glasses_height = int(glasses_width / aspect_ratio * 0.8)
+            glasses_height = int(glasses_width / aspect_ratio)
 
             resized_sprite = cv2.resize(self.glasses_sprite, (glasses_width, glasses_height))
 
@@ -247,7 +253,7 @@ class Face:
             rotated_sprite = cv2.warpAffine(resized_sprite, M, (glasses_width, glasses_height))
 
             center_x = int((left_eye_center[0] + right_eye_center[0]) / 2)
-            center_y = int((left_eye_center[1] + right_eye_center[1]) / 2)
+            center_y = int((left_eye_center[1] + right_eye_center[1]) / 2) + 10
             x_start = center_x - glasses_width // 2
             y_start = center_y - glasses_height // 2
 
@@ -280,6 +286,8 @@ class Face:
     def update_tracker(self, frame):
         success, box = self.tracker.update(frame)
         if success:
+            self.lost_count = 0
+
             x, y, w, h = map(int, box)
 
             new_x = x + w // 2

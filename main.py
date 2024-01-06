@@ -37,7 +37,7 @@ def update_history_face(circles):
                     continue
                 face_pos = face.pos.get_avg_position()
                 distance = np.sqrt((circle[0] - face_pos[0])**2 + (circle[1] - face_pos[1])**2)
-                if distance < face_pos[2]*1.5:
+                if distance < face_pos[2]:
                     return face
             return None
 
@@ -52,15 +52,9 @@ def update_history_face(circles):
                 faces.append(new_face)
 
 
-def detect_faces(frame, last_frame):
-    if last_frame is not None:
-        frame_diff = cv2.absdiff(last_frame, frame)
-        gray_diff = cv2.cvtColor(frame_diff, cv2.COLOR_BGR2GRAY)
-        kernel = np.ones((2, 2), np.uint8)
-        blur_diff = cv2.medianBlur(gray_diff, 1)
-        erosion = cv2.erode(blur_diff, kernel, iterations=1)
-        thresh_diff = cv2.threshold(erosion, 10, 255, cv2.THRESH_BINARY)[1]
-        circles = cv2.HoughCircles(thresh_diff, method=cv2.HOUGH_GRADIENT, dp=cv2.getTrackbarPos("dp", "Circle Settings Face")/10,
+def detect_faces(frame):
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        circles = cv2.HoughCircles(gray_frame, method=cv2.HOUGH_GRADIENT, dp=cv2.getTrackbarPos("dp", "Circle Settings Face")/10,
                                    minDist=cv2.getTrackbarPos("minDist", "Circle Settings Face"), param1=cv2.getTrackbarPos("param1", "Circle Settings Face"), param2=cv2.getTrackbarPos("param2", "Circle Settings Face"), minRadius=cv2.getTrackbarPos("minRadius", "Circle Settings Face"), maxRadius=cv2.getTrackbarPos("maxRadius", "Circle Settings Face"))
 
         if circles is not None:
@@ -68,7 +62,6 @@ def detect_faces(frame, last_frame):
             # for i in circles[0, :]:
             #     cv2.circle(display_frame, (i[0], i[1]), i[2], (0, 255, 0), 2)
             #     cv2.circle(display_frame, (i[0], i[1]), 2, (0, 0, 255), 3)
-
             update_history_face(circles)
 
 
@@ -82,23 +75,22 @@ cam = cv2.VideoCapture(2)
 cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1920/2)
 cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080/2)
 
-last_frame = None
 
 while True:
     ret, frame = cam.read()
 
     if ret:
         display_frame = frame.copy()
-        detect_faces(frame, last_frame)
-        last_frame = frame.copy()
+        detect_faces(frame)
 
         for face in faces:
             face.compute(frame, display_frame)
 
+        faces = [face for face in faces if face.status != FaceStatus.DESTROYED]
 
-        cv2.imshow('Detected', display_frame)
+        cv2.imshow('Glasses fitting', display_frame)
 
-        if cv2.waitKey(5) == 27 or cv2.getWindowProperty('Detected', cv2.WND_PROP_VISIBLE) < 1:
+        if cv2.waitKey(5) == 27 or cv2.getWindowProperty('Glasses fitting', cv2.WND_PROP_VISIBLE) < 1:
             break
 
 cv2.destroyAllWindows()
