@@ -2,7 +2,7 @@ import cv2
 from face import Face, FaceStatus
 import numpy as np
 
-N = 3
+N = 2
 faces = []
 
 edges = {
@@ -10,7 +10,7 @@ edges = {
 }
 
 circle_settings = {
-    "dp": [2, 50], "minDist": [100, 500], "param1": [100, 150],
+    "dp": [4, 50], "minDist": [50, 500], "param1": [100, 150],
     "param2": [16, 150], "minRadius": [5, 100], "maxRadius": [22, 100]
 }
 
@@ -93,7 +93,8 @@ while True:
         last_frame = frame.copy()
 
         for face in faces:
-            face.compute(display_frame)
+            face.compute(frame, display_frame)
+
 
         cv2.imshow('Detected', display_frame)
 

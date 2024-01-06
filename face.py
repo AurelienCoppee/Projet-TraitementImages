@@ -3,43 +3,32 @@ from collections import deque
 from enum import Enum
 import time
 import numpy as np
+import os
 
-def update_history_eyes(circles, left, right):
+def update_history_eyes(circles, eyes, N):
     if circles is not None:
-        avg_pos1_x, avg_pos1_y, avg_d1 = left.pos.get_avg_position()
-        avg_pos2_x, avg_pos2_y, avg_d2 = right.pos.get_avg_position()
+        circles = np.uint16(np.around(circles))
         circles = sorted(circles[0], key=lambda x: x[0])
 
-        def compute_distances(avg_x, avg_y, circles):
-            return [np.sqrt((c[0] - avg_x)**2 + (c[1] - avg_y)**2) for c in circles] if avg_x or avg_y else [float("inf")] * len(circles)
+        def associate_circle_with_eye(circle, eyes):
+            for eye in eyes:
+                if eye.status == FaceStatus.DESTROYED:
+                    continue
+                eye_pos = eye.pos.get_avg_position()
+                distance = np.sqrt((circle[0] - eye_pos[0])**2 + (circle[1] - eye_pos[1])**2)
+                if distance < eye_pos[2]*3:
+                    return eye
+            return None
 
-        def get_position_indices(avg_pos1, avg_pos2):
-            dists_pos1 = compute_distances(*avg_pos1, circles)
-            dists_pos2 = compute_distances(*avg_pos2, circles)
-
-            pos1_idx = np.argmin(dists_pos1)
-            pos2_idx = np.argmin(dists_pos2)
-
-            if pos1_idx == pos2_idx:
-                if dists_pos1[pos1_idx] <= dists_pos2[pos2_idx]:
-                    pos2_idx = np.argsort(dists_pos2)[
-                        1] if len(circles) > 1 else None
-                else:
-                    pos1_idx = np.argsort(dists_pos1)[1] if len(
-                        circles) > 1 else None
-            return pos1_idx, pos2_idx
-
-        pos1_idx, pos2_idx = get_position_indices(
-            (avg_pos1_x, avg_pos1_y), (avg_pos2_x, avg_pos2_y))
-
-        if pos1_idx is not None and pos2_idx is not None:
-            if circles[pos1_idx][0] > circles[pos2_idx][0]:
-                pos1_idx, pos2_idx = pos2_idx, pos1_idx
-
-        if pos1_idx is not None:
-            left.pos.update_history(circles[pos1_idx])
-        if pos2_idx is not None:
-            right.pos.update_history(circles[pos2_idx])
+        for circle in circles:
+            eye = associate_circle_with_eye(circle, eyes)
+            if eye is not None:
+                if eye.status == EyeStatus.CREATED:
+                    eye.update_history(circle)
+            else:
+                new_eye = Eye(N)
+                new_eye.update_history(circle)
+                eyes.append(new_eye)
 
 class CircleTracker:
     def __init__(self, N):
@@ -65,25 +54,91 @@ class CircleTracker:
 class Eye:
     def __init__(self, N):
         self.pos = CircleTracker(N)
+        self.status = EyeStatus.CREATED
+        self.update_count = 0
+        self.created_time = time.time()
+        self.update_interval = 2
+        self.update_threshold = 3
+        self.lost_threshold = 15
+        self.lost_count = 0
 
     def draw(self, frame):
         self.pos.draw(frame, (255, 0, 0))
 
+    def update_history(self, circle):
+        self.pos.update_history(circle)
+        if self.status == EyeStatus.CREATED:
+            self.update_count += 1
+
+    def compute(self, frame):
+        if self.status == EyeStatus.CREATED:
+            current_time = time.time()
+            if current_time - self.created_time > self.update_interval:
+                self.status = EyeStatus.DESTROYED
+
+            if self.update_count >= self.update_threshold:
+                self.update_count = 0
+                self.initialize_tracker(frame)
+                self.created_time = time.time()
+                self.status = EyeStatus.CIRCLE_VALIDATED
+                return
+            
+        if self.status == EyeStatus.CIRCLE_VALIDATED:
+            self.update_tracker(frame)
+
+            
+    def initialize_tracker(self, frame):
+        avg_x, avg_y, avg_d = self.pos.get_avg_position()
+        enlargement_factor = 8
+        enlarged_d = int(avg_d * enlargement_factor)
+        new_x = int(avg_x - enlarged_d / 2)
+        new_y = int(avg_y - enlarged_d / 2)
+        new_width = new_height = enlarged_d
+        self.tracker = cv2.legacy.TrackerMOSSE_create()
+        self.tracker.init(frame, (new_x, new_y, new_width, new_height))
+
+    def update_tracker(self, frame):
+        success, box = self.tracker.update(frame)
+        if success:
+            x, y, w, h = map(int, box)
+
+            # cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+            new_x = x + w // 2
+            new_y = y + h // 2
+            new_d = (w + h) // 2
+
+            self.update_history((new_x, new_y, new_d))
+        else:
+            print("Can't track")
+        #     if self.lost_count >= self.lost_threshold:
+        #         self.update_count = 0
+        #         self.status = EyeStatus.CREATED
+        #     else:
+        #         self.lost_count += 1
+
+class EyeStatus(Enum):
+    DESTROYED = 0
+    CREATED = 1
+    CIRCLE_VALIDATED = 2
+
 class Face:
     def __init__(self, N):
+        self.N = N
         self.pos = CircleTracker(N)
         self.left_eye = Eye(N)
         self.right_eye = Eye(N)
         self.status = FaceStatus.CREATED
         self.created_time = time.time()
         self.update_threshold = 8
-        self.eyes_threshold = 8
         self.lost_threshold = 15
-        self.update_interval = 1
+        self.update_interval = 0.25
         self.update_count = 0
         self.lost_count = 0
+        self.eyes = []
+        self.eyecount = 0
 
-    def compute(self, frame):
+    def compute(self, frame, display_frame):
         if self.status == FaceStatus.CREATED:
             current_time = time.time()
             if current_time - self.created_time > self.update_interval:
@@ -137,37 +192,80 @@ class Face:
                                     maxRadius=cv2.getTrackbarPos("maxRadius", "Circle Settings"))
 
             if circles is not None:
-                self.update_count += 1
                 circles = np.uint16(np.around(circles))
                 for i in circles[0, :]:
-                    print(circles)
-                    print(self.update_count)
-                    update_history_eyes(circles, self.left_eye, self.right_eye)
-                    cv2.circle(masked_frame, (i[0], i[1]), i[2], (0, 255, 0), 2)
-                    cv2.circle(masked_frame, (i[0], i[1]), 2, (0, 0, 255), 3)
+                    update_history_eyes(circles, self.eyes, self.N)
+                    cv2.circle(closed_edges, (i[0], i[1]), i[2], (0, 255, 0), 2)
+                    cv2.circle(closed_edges, (i[0], i[1]), 2, (0, 0, 255), 3)
 
-            cv2.imshow('Detected Circles on Contours', circle_mask)
             cv2.imshow("Edges", closed_edges)
             cv2.imshow("Masked Frame", masked_frame)
             current_time = time.time()
-            print(self.update_count)
+
+            self.eyecount = 0
+
+            for eye in self.eyes:
+                eye.compute(frame)
+                if eye.status == EyeStatus.CIRCLE_VALIDATED:
+                    self.eyecount += 1
+
             if current_time - self.created_time > self.update_interval:
                 self.status = FaceStatus.DESTROYED
 
-            if self.update_count >= self.eyes_threshold:
-                # self.initialize_tracker(frame)
-                print(self.left_eye.pos.get_avg_position())
-                print(self.right_eye.pos.get_avg_position())
-                if self.left_eye.pos.get_avg_position() != (0,0,0) and self.right_eye.pos.get_avg_position() != (0,0,0):
-                    self.status = FaceStatus.FACE_VALIDATED
+            if self.eyecount >= 2:
+                self.status = FaceStatus.FACE_VALIDATED
                 
             return
         
         if self.status == FaceStatus.FACE_VALIDATED:
-            print("vali")
-            self.update_tracker(frame)
-            self.left_eye.draw(frame)
-            self.right_eye.draw(frame)
+            if self.left_eye.pos.get_avg_position() == (0, 0, 0) and self.right_eye.pos.get_avg_position() == (0, 0, 0):
+                self.select_eyes()
+                self.load_glasses_sprite()
+            self.left_eye.compute(frame)
+            self.right_eye.compute(frame)
+            self.draw_glasses(display_frame)
+
+    def load_glasses_sprite(self):
+        self.glasses_sprite = cv2.imread('Projet-TraitementImages/glasses.png', cv2.IMREAD_UNCHANGED)
+
+    def draw_glasses(self, frame):
+            left_eye_center = self.left_eye.pos.get_avg_position()[:2]
+            right_eye_center = self.right_eye.pos.get_avg_position()[:2]
+
+            dy = right_eye_center[1] - left_eye_center[1]
+            dx = right_eye_center[0] - left_eye_center[0]
+            angle = -np.degrees(np.arctan2(dy, dx))
+
+            glasses_width = int(abs(dx) * 2.1)
+            
+            aspect_ratio = self.glasses_sprite.shape[1] / self.glasses_sprite.shape[0]
+            glasses_height = int(glasses_width / aspect_ratio * 0.8)
+
+            resized_sprite = cv2.resize(self.glasses_sprite, (glasses_width, glasses_height))
+
+            M = cv2.getRotationMatrix2D((glasses_width / 2, glasses_height / 2), angle, 1)
+            rotated_sprite = cv2.warpAffine(resized_sprite, M, (glasses_width, glasses_height))
+
+            center_x = int((left_eye_center[0] + right_eye_center[0]) / 2)
+            center_y = int((left_eye_center[1] + right_eye_center[1]) / 2)
+            x_start = center_x - glasses_width // 2
+            y_start = center_y - glasses_height // 2
+
+            for y in range(rotated_sprite.shape[0]):
+                for x in range(rotated_sprite.shape[1]):
+                    if rotated_sprite[y, x, 3] != 0:
+                        frame[y_start + y, x_start + x] = rotated_sprite[y, x][:3]
+
+    def select_eyes(self):
+        if len(self.eyes) >= 2:
+            self.eyes.sort(key=lambda eye: eye.pos.get_avg_position()[0])
+            if len(self.eyes) > 2:
+                closest_eyes = sorted(self.eyes, key=lambda eye: abs(eye.pos.get_avg_position()[1] - self.eyes[0].pos.get_avg_position()[1]))[:2]
+                closest_eyes.sort(key=lambda eye: eye.pos.get_avg_position()[0])
+            else:
+                closest_eyes = self.eyes
+
+            self.left_eye, self.right_eye = closest_eyes[:2]
     
     def update_history(self, circle):
         self.pos.update_history(circle)
@@ -192,7 +290,8 @@ class Face:
         else:
             if self.lost_count >= self.lost_threshold:
                 self.update_count = 0
-                self.status = FaceStatus.DESTROYED
+                self.eyes = []
+                self.status = FaceStatus.CREATED
             else:
                 self.lost_count += 1
 
